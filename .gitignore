@@ -1,0 +1,4 @@
+.venv
+.m2
+.npm
+logs

@@ -1,0 +1,1 @@
+{"metadata":{"name":"mysql"},"image":{"image":"docker.io/library/ubuntu:22.04"},"args":["bash","-c","sleep inf"],"envs":[{"key":"MYSQL_ROOT_PASSWORD","value":"123456"}],"log_path":"7e08e68d-9ea8-4692-a036-47a09ad218bd.log"}
