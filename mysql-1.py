@@ -1,11 +1,12 @@
 import mysql.connector
 from mysql.connector import Error
 import random
+import sys
 
 # 连接MySQL数据库
 try:
     connection = mysql.connector.connect(
-        host='172.22.0.155',       # 数据库主机地址
+        host=sys.argv[1],       # 数据库主机地址
         user='root',   # 数据库用户名
         password='123456' # 数据库密码
     )
