@@ -1,14 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const caseName = "mysql"
@@ -39,61 +36,17 @@ func prepareSingle(cpID string) {
 	pod := newPod(cpID)
 	defer pod.destroy()
 
-	// create container
-	containerConfig := &ContainerConfig{
-		Metadata: &ContainerMetadata{
-			Name: "mysql",
-		},
-		Image: &ImageSpec{
-			// Image: "docker.io/library/mysql:8.3.0",
-			Image: "testregistry.scs.buaa.edu.cn/test-java:v1",
-			// Image: "testregistry.scs.buaa.edu.cn/full-ubuntu:v1",
-		},
-		Envs: []*KeyValue{
-			{
-				Key:   "MYSQL_ROOT_PASSWORD",
-				Value: "123456",
-			},
-		},
-		// Args: []string{"bash", "-c", "sleep inf"},
-		// Args: []string{
-		// 	"bash",
-		// 	"-c",
-		// 	fmt.Sprintf("cp /root/tools/entry /root/entry && /root/entry %d %d %s", fileSize, memSize, "/root/tools/signal.txt"),
-		// },
-		Mounts: []*Mount{
-			{
-				ContainerPath: "/root/ccr-test",
-				HostPath:      "/root/ccr-test",
-				Readonly:      false,
-			},
-			{
-				ContainerPath: "/root/linux",
-				HostPath:      "/root/linux/linux-5.10.1",
-				Readonly:      true,
-			},
-		},
-		LogPath: cpID + ".log",
-	}
-	containerConfigFilename := fmt.Sprintf("container-config-%s.json", cpID)
-	defer os.Remove(containerConfigFilename)
-	containerConfigBytes, err := json.Marshal(containerConfig)
-	if err != nil {
-		panic("marshal container config failed: " + err.Error())
-	}
-	os.Remove(containerConfigFilename)
-	err = os.WriteFile(containerConfigFilename, containerConfigBytes, 0644)
-	if err != nil {
-		panic("write container config file failed: " + err.Error())
-	}
-	containerID := runCmd("crictl create " + pod.id + " " + containerConfigFilename + " " + podConfigFilename)
+	container := newContainer(pod, cpID)
+	defer container.destroy()
+
+	containerID := container.id
 
 	// start container
 	runCmd("crictl start " + containerID)
 
-	// time.Sleep(time.Second * 60)
-
-	// runCmd(fmt.Sprintf("source /root/ccr-test/.venv/bin/activate && python /root/ccr-test/mysql-1.py %s", podIP))
+	if testCase.initCmd != nil {
+		runCmd(testCase.initCmd(pod, container))
+	}
 
 	// stop container
 	runCmd("crictl stop " + containerID)
@@ -110,53 +63,17 @@ func runSingle(cpID string, port int) {
 	pod := newPod(cpID)
 	defer pod.destroy()
 
-	containerConfig := &ContainerConfig{
-		Metadata: &ContainerMetadata{
-			Name: "mysql",
-		},
-		Image: &ImageSpec{
-			Image: "docker.io/library/mysql:8.3.0",
-			// Image: "testregistry.scs.buaa.edu.cn/test-java:v1",
-		},
-		Envs: []*KeyValue{
-			{
-				Key:   "MYSQL_ROOT_PASSWORD",
-				Value: "123456",
-			},
-		},
-		// Args: []string{"bash", "-c", "cp -r /root/linux /root/my-linux && echo ok > /root/ccr-test/tools/entry/signal.txt && sleep inf"},
-		// Args: []string{
-		// 	"bash",
-		// 	"-c",
-		// 	fmt.Sprintf("cp /root/tools/entry /root/entry && /root/entry %d %d %s", fileSize, memSize, "/root/tools/signal.txt"),
-		// },
-		Mounts: []*Mount{
-			{
-				ContainerPath: "/root/ccr-test",
-				HostPath:      "/root/ccr-test",
-				Readonly:      false,
-			},
-			{
-				ContainerPath: "/root/linux",
-				HostPath:      "/root/linux/linux-5.10.1",
-				Readonly:      true,
-			},
-		},
-		LogPath: cpID + ".log",
-	}
-	containerConfigFilename := fmt.Sprintf("container-config-%s.json", cpID)
-	defer os.Remove(containerConfigFilename)
-	containerConfigBytes, err := json.Marshal(containerConfig)
-	if err != nil {
-		panic("marshal container config failed: " + err.Error())
-	}
-	os.Remove(containerConfigFilename)
-	err = os.WriteFile(containerConfigFilename, containerConfigBytes, 0644)
-	if err != nil {
-		panic("write container config file failed: " + err.Error())
-	}
+	container := newContainer(pod, cpID)
+	defer container.destroy()
 
-	proxyCmd := exec.Command("/root/go-tcp-proxy/cmd/tcp-proxy/tcp-proxy", "-l", fmt.Sprintf(":%d", port), "-pod", podID, "-r", podIP+":3306", "-pod-config", podConfigFilename, "-container-config", containerConfigFilename)
+	proxyCmd := exec.Command(
+		"/root/go-tcp-proxy/cmd/tcp-proxy/tcp-proxy",
+		"-l", fmt.Sprintf(":%d", port),
+		"-pod", pod.id,
+		"-r", pod.ip+fmt.Sprintf("%d", testCase.port),
+		"-pod-config", pod.configFielName,
+		"-container-config", container.configFilename,
+	)
 	proxyCmd.Stdout = os.Stdout
 	proxyCmd.Stderr = os.Stderr
 	if err := proxyCmd.Start(); err != nil {
@@ -170,11 +87,13 @@ func runSingle(cpID string, port int) {
 
 	startTime := time.Now()
 
-	// runCmd("curl http://localhost:" + fmt.Sprintf("%d", port))
-	runCmd(fmt.Sprintf("source /root/ccr-test/.venv/bin/activate && python /root/ccr-test/mysql-2.py %d", port))
+	if testCase.secondCmd != nil {
+		runCmd(testCase.secondCmd(pod, container, port))
+	}
 
-	// containerID := runCmd("crictl create " + podID + " " + containerConfigFilename + " " + podConfigFilename)
-
+	// containerID := runCmd(
+	// 	"crictl create " + pod.id + " " + container.configFilename + " " + pod.configFielName,
+	// )
 	// // start container
 	// runCmd("crictl start " + containerID)
 

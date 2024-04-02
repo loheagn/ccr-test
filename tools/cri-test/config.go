@@ -9,14 +9,36 @@ import (
 )
 
 type TestCase struct {
-	nfsID string
-	rrwID string
+	nfsID     string
+	rrwID     string
+	image     string
+	port      int
+	startCmd  string
+	initCmd   func(PodMan, ContainerMan) string
+	secondCmd func(PodMan, ContainerMan, int) string
 }
 
 var cases = map[string]TestCase{
 	"mysql": {
 		nfsID: "cp-mysql-nfs-raw-4-id-",
 		rrwID: "cp-mysql-rrw-1-id-",
+		image: "docker.io/library/mysql:8.3.0",
+		port:  3306,
+		initCmd: func(pod PodMan, container ContainerMan) string {
+			return fmt.Sprintf("source /root/ccr-test/.venv/bin/activate && python /root/ccr-test/mysql-1.py %s", pod.ip)
+		},
+		secondCmd: func(_ PodMan, _ ContainerMan, port int) string {
+			return fmt.Sprintf("source /root/ccr-test/.venv/bin/activate && python /root/ccr-test/mysql-2.py %d", port)
+		},
+	},
+	"java": {
+		nfsID: "cp-mysql-nfs-raw-4-id-",
+		rrwID: "cp-java-rrw-26-id-",
+		image: "testregistry.scs.buaa.edu.cn/test-java:v1",
+		port:  8080,
+		secondCmd: func(_ PodMan, _ ContainerMan, port int) string {
+			return "curl http://localhost:" + fmt.Sprintf("%d", port)
+		},
 	},
 }
 
@@ -29,7 +51,7 @@ type PodMan struct {
 func newPod(cpID string) PodMan {
 	podConfig := &PodSandboxConfig{
 		Metadata: &PodSandboxMetadata{
-			Name:      "mysql-test" + cpID,
+			Name:      caseName + cpID,
 			Namespace: "default",
 			Attempt:   1,
 			Uid:       uuid.NewString(),
@@ -69,4 +91,65 @@ func (p PodMan) destroy() {
 	runCmd("crictl stopp " + p.id)
 	// remove pod sandbox
 	runCmd("crictl rmp " + p.id)
+}
+
+type ContainerMan struct {
+	id             string
+	configFilename string
+}
+
+func newContainer(pod PodMan, cpID string) ContainerMan {
+	// create container
+	containerConfig := &ContainerConfig{
+		Metadata: &ContainerMetadata{
+			Name: caseName,
+		},
+		Image: &ImageSpec{
+			Image: testCase.image,
+		},
+		Envs: []*KeyValue{
+			{
+				Key:   "MYSQL_ROOT_PASSWORD",
+				Value: "123456",
+			},
+		},
+		Mounts: []*Mount{
+			{
+				ContainerPath: "/root/ccr-test",
+				HostPath:      "/root/ccr-test",
+				Readonly:      false,
+			},
+			{
+				ContainerPath: "/root/linux",
+				HostPath:      "/root/linux/linux-5.10.1",
+				Readonly:      true,
+			},
+		},
+		LogPath: cpID + ".log",
+	}
+	if cmd := testCase.startCmd; len(cmd) > 0 {
+		containerConfig.Args = []string{"bash", "-c", cmd}
+	}
+
+	containerConfigFilename := fmt.Sprintf("container-config-%s.json", cpID)
+	defer os.Remove(containerConfigFilename)
+	containerConfigBytes, err := json.Marshal(containerConfig)
+	if err != nil {
+		panic("marshal container config failed: " + err.Error())
+	}
+	os.Remove(containerConfigFilename)
+	err = os.WriteFile(containerConfigFilename, containerConfigBytes, 0644)
+	if err != nil {
+		panic("write container config file failed: " + err.Error())
+	}
+	containerID := runCmd("crictl create " + pod.id + " " + containerConfigFilename + " " + pod.configFielName)
+
+	return ContainerMan{
+		id:             containerID,
+		configFilename: containerConfigFilename,
+	}
+}
+
+func (c ContainerMan) destroy() {
+	os.Remove(c.configFilename)
 }
